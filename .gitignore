@@ -1,1 +1,6 @@
 .DS_Store
+*browsecomp-zh-decrypted.xlsx
+raw_data/browsecomp-zh-decrypted.json
+eval_data/
+output_data/
+predict_data/

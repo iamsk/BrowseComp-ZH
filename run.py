@@ -18,191 +18,38 @@ load_dotenv(override=True)
 class BrowsecampEval:
     def __init__(self, args):
         self.args = args
-        if self.args.model in ["Qwen2.5-Max", "QwQ-32B", "Qwen3-235B-thinking", "Qwen3-235B-no-thinking"]:
-            self.args.max_workers = 3 # Qwen2.5-Max may have a maximum request limit (or rate limit) depending on the specific API or service provider's policy.
-        
-        if self.args.model in ['GPT-4o', 'O1']:
-            self.client = OpenAI(api_key=os.getenv('openai_api_key'))
-        elif self.args.model == 'O4-mini':
-            self.client = OpenAI(api_key=os.getenv('openai_v2_api_key'), base_url=os.getenv('openai_v2_base_url'))
-            self.args.max_workers = 5
-        elif self.args.model in ['DeepSeek-R1', 'DeepSeek-V3']:
-            self.client = OpenAI(api_key=os.getenv('deepseek_api_key'), base_url=os.getenv('deepseek_base_url'))
-        elif self.args.model in ['Qwen2.5-72B-Instruct', 'QwQ-32B', 'Qwen2.5-Max', "Qwen3-235B-thinking", "Qwen3-235B-no-thinking"]:
-            self.client = OpenAI(api_key=os.getenv('qwen_api_key'), base_url=os.getenv('qwen_base_url'))
-        elif self.args.model == 'Llama4':
-            self.client = OpenAI(api_key=os.getenv('llama_api_key'), base_url=os.getenv('llama_base_url'))
-        elif self.args.model in ['Gemini2.5-Pro', 'Gemini2.0-Flash']:
-            self.client = genai.Client(api_key=os.getenv('gemini_api_key'))
-        elif self.args.model in ['Claude3.7-think', 'Claude3.5-Sonnet']:
-            self.client = anthropic.Anthropic(api_key=os.getenv('claude_api_key'))
-            self.args.max_workers = 3 # Claude enforces a rate limit of 80,000 tokens per minute
-        
-        self.eval_client = OpenAI(api_key=os.getenv('openai_api_key'))
-        
+        self.client = OpenAI(api_key=os.getenv('openai_v2_api_key'), base_url=os.getenv('openai_v2_base_url'))
+        self.args.max_workers = 5
+
     def get_remote_response(self, messages, eval=False):
-        model_name_dict = {
-            "GPT-4o": "gpt-4o",
-            "O1": "o1",
-            "O4-mini": "o4-mini",
-            "Claude3.7-think": "claude-3-7-sonnet-20250219",
-            "Claude3.5-Sonnet": "claude-3-5-sonnet-20240620",
-            "Gemini2.5-Pro": "gemini-2.5-pro-preview-03-25",
-            "Gemini2.0-Flash": "models/gemini-2.0-flash",
-            "Qwen2.5-Max": "qwen-max-2025-01-25",
-            "Qwen2.5-72B-Instruct":"qwen2.5-72b-instruct",
-            "DeepSeek-R1": "deepseek-r1-250120",
-            "DeepSeek-V3": "deepseek-v3-250324",
-            "QwQ-32B":"qwq-32b",
-            "Llama4": "accounts/fireworks/models/llama4-maverick-instruct-basic",
-            "Qwen3-235B-thinking": "qwen3-235b-a22b",
-            "Qwen3-235B-no-thinking": "qwen3-235b-a22b",
-        }
         if eval:
             model_name = "gpt-4o"
-            response = self.eval_client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 model=model_name,
                 messages=messages,
                 stream=False,
-                temperature=0.6,
+                temperature=0,
                 top_p=0.95
             )
             return response.choices[0].message.content
         else:
             try:
-                model_name = model_name_dict[self.args.model]
-                if self.args.model in ["Gemini2.5-Pro", "Gemini2.0-Flash"]:
-                    contents = [
-                        types.Content(role="model", parts=[types.Part(text=messages[0]["content"])]),
-                        types.Content(role="user", parts=[types.Part(text=messages[1]["content"])])
-                    ]
-                    response = self.client.models.generate_content(
-                        model=model_name,
-                        contents=contents,
-                        config={
-                            "temperature": 0.6,
-                            "top_p": 0.95,
-                        }
-                    )
-                    return response.text, response.usage_metadata.total_token_count
-                elif self.args.model == "DeepSeek-R1":
-                    response = self.client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        stream=False,
-                        temperature=0.6,
-                        top_p=0.95
-                    )
-                    return "<think>" + response.choices[0].message.reasoning_content + \
-                            "</think>\n<answer>" + response.choices[0].message.content + "</answer>", response.usage.total_tokens
-                elif self.args.model == "Claude3.7-think":
-                    with self.client.beta.messages.stream( 
-                        model=model_name,
-                        system=SYSTEM_PROMPT_CN,
-                        thinking={"type": "enabled", "budget_tokens": 32000},
-                        messages=messages[1:],
-                        max_tokens=128000,
-                        betas=["output-128k-2025-02-19"],
-                        temperature=1.0
-                    ) as stream:
-                        response_text = "<think>"
-                        latest_status = "thinking"
-                        for event in stream: 
-                            if event.type == "text":
-                                if latest_status == "thinking":
-                                    latest_status = "text"
-                                    response_text += f"</think>\n<answer>{event.text}"
-                                else:
-                                    response_text += event.text
-                            elif event.type == "thinking":
-                                response_text += f"{event.thinking}"
-                            if event.type == 'message_stop':
-                                input_tokens = event.message.usage.input_tokens
-                                output_tokens = event.message.usage.output_tokens
-                                total_tokens = input_tokens + output_tokens
-                    return response_text.strip() + "</answer>", total_tokens
-                elif self.args.model == "Claude3.5-Sonnet":
-                    response = self.client.messages.create(
-                        model=model_name,
-                        system=SYSTEM_PROMPT_CN,
-                        messages=messages[1:],
-                        max_tokens=8000,
-                        temperature=0.6,
-                        top_p=0.95,
-                    )
-                    return response.content[0].text, response.usage.input_tokens + response.usage.output_tokens
-                elif self.args.model == "Qwen3-235B-no-thinking":
-                    response = self.client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        stream=True,
-                        temperature=0.6,
-                        top_p=0.95,
-                        stream_options={"include_usage": True},
-                        extra_body={"enable_thinking": False}
-                    )
-                    response_text = ""
-                    latest_status = "think"
-                    for chunk in response:
-                        if chunk.choices == []:
-                            total_tokens = chunk.usage.total_tokens
-                            continue
-                        if chunk.choices[0].delta.content is not None:
-                            if latest_status == "think":
-                                latest_status = "answer"
-                                response_text += chunk.choices[0].delta.content
-                            else:
-                                response_text += chunk.choices[0].delta.content
-                        else:
-                            response_text += chunk.choices[0].delta.reasoning_content
-                    return response_text.strip(), total_tokens
-                elif self.args.model in ["QwQ-32B", "Qwen3-235B-thinking"]:
-                    response = self.client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        stream=True,
-                        temperature=0.6,
-                        top_p=0.95,
-                        stream_options={"include_usage": True},
-                        extra_body={"enable_thinking": True if self.args.model != "QwQ-32B" else False}
-                    )
-                    response_text = "<think>"
-                    latest_status = "think"
-                    for chunk in response:
-                        if chunk.choices == []:
-                            total_tokens = chunk.usage.total_tokens
-                            continue
-                        if chunk.choices[0].delta.content is not None:
-                            if latest_status == "think":
-                                latest_status = "answer"
-                                response_text += "</think>\n<answer>" + chunk.choices[0].delta.content
-                            else:
-                                response_text += chunk.choices[0].delta.content
-                        else:
-                            response_text += chunk.choices[0].delta.reasoning_content
-                    return response_text.strip() + "</answer>", total_tokens
-                elif self.args.model == "O1":
-                    response = self.client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        stream=False,
-                        timeout=3000
-                    )
-                else:
-                    response = self.client.chat.completions.create(
-                        model=model_name,
-                        messages=messages,
-                        stream=False,
-                        temperature=0.6,
-                        top_p=0.95
-                    )
+                model_name = self.args.model
+                response = self.client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    stream=False,
+                    temperature=0,
+                    top_p=0.95,
+                    extra_body={"reasoning": {"enabled": True}, "plugins": [{"id": "web", "engine": "exa", "max_results": 10}]},
+                )
                 return response.choices[0].message.content, response.usage.total_tokens
             except Exception as e:
                 print(f"question: {messages[1]['content']} and problem: {e}")
                 return "", 0
         # print(f"prompt_tokens:{response.usage.prompt_tokens}, completion_tokens:{response.usage.completion_tokens}, total_tokens:{response.usage.total_tokens}")
-        
-    
+
+
     def get_multi_infer_response(self):
         # 1 build_infer_chat_data
         chat_datas = []
@@ -218,7 +65,7 @@ class BrowsecampEval:
             chat_data['question'] = query["Question"]
             chat_data['answer'] = query["Answer"]
             chat_datas.append(chat_data)
-        
+
         # 2 get response
         # 3 save
         predict_infer_file_dir = os.path.join(self.args.predict_infer_file_dir, self.args.model)
@@ -247,18 +94,18 @@ class BrowsecampEval:
                     result = {"question": chat_datas[i]['question'], "answer": chat_datas[i]['answer'], "response": response,
                         "explanation": explanation, "exact_answer": exact_answer, "confidence": confidence, "total_tokens": total_tokens}
                     f.write(json.dumps(result, ensure_ascii=False) + '\n')
-        
+
     def generate_infer_eval(self):
         # 1 load data
         with open(self.args.input_file_path, 'r') as f:
             raw_datas = json.load(f)
         raw_datas_copy = copy.deepcopy(raw_datas)
-        
+
         infer_datas = []
         with open(os.path.join(self.args.predict_infer_file_dir, self.args.model, 'infer.jsonl'), 'r') as f:
             for line in f:
                 infer_datas.append(json.loads(line))
-        
+
         # 2 judge answer
         messages = []
         for i, infer_data in enumerate(infer_datas):
@@ -267,7 +114,7 @@ class BrowsecampEval:
                 {"role": "user", "content": JUDGE_PROMPT_CN.format(question=infer_data['question'], response=infer_data['response'], correct_answer=infer_data['answer'])},
             ]
             messages.append(message)
-        
+
         # 3 save
         eval_infer_file_dir = os.path.join(self.args.eval_infer_file_dir, self.args.model)
         output_infer_file_dir = os.path.join(self.args.output_infer_file_dir, self.args.model)
@@ -294,6 +141,8 @@ class BrowsecampEval:
                         model_extracted_confidence = matches.group(4).strip()
                     else:
                         model_extracted_answer, reasoning, is_correct, model_extracted_confidence = "", "", "", ""
+                    print(f'raw_datas_copy: {raw_datas_copy}')
+                    print(f'infer_datas: {infer_datas}')
                     assert raw_datas_copy[i]['Question'] == infer_datas[i]['question']
                     eval_result = {
                         "model_extracted_answer": model_extracted_answer,
@@ -313,7 +162,7 @@ class BrowsecampEval:
                     raw_datas_copy[i]["eval_result"] = [eval_result]
                     eval_f.write(json.dumps(chat_data, ensure_ascii=False) + '\n')
                     final_f.write(json.dumps(raw_datas_copy[i], ensure_ascii=False) + '\n')
-            
+
     def eval_infer(self):
         # 1 get response
         self.get_multi_infer_response()
@@ -322,7 +171,7 @@ class BrowsecampEval:
 
     def run(self):
         self.eval_infer()
-        
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -335,7 +184,7 @@ if __name__ == '__main__':
     parser.add_argument('--output_infer_file_dir', type=str, default=f"output_data")
     parser.add_argument('--max_workers', type=int, default=10)
     args = parser.parse_args()
-    
+
     eval = BrowsecampEval(args)
     eval.run()
-    
+
