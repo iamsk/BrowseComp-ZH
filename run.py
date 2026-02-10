@@ -29,7 +29,7 @@ class BrowsecampEval:
                 messages=messages,
                 stream=False,
                 temperature=0,
-                top_p=0.95
+                top_p=1
             )
             return response.choices[0].message.content
         else:
@@ -40,8 +40,8 @@ class BrowsecampEval:
                     messages=messages,
                     stream=False,
                     temperature=0,
-                    top_p=0.95,
-                    extra_body={"reasoning": {"enabled": True}, "plugins": [{"id": "web", "engine": "exa", "max_results": 10}]},
+                    top_p=1,
+                    extra_body={"reasoning": {"effort": "high"}, "plugins": [{"id": "web", "engine": "exa"}]},
                 )
                 return response.choices[0].message.content, response.usage.total_tokens
             except Exception as e:
